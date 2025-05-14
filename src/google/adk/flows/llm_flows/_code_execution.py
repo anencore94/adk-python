@@ -22,7 +22,6 @@ import dataclasses
 import os
 import re
 from typing import AsyncGenerator
-from typing import Generator
 from typing import Optional
 from typing import TYPE_CHECKING
 
@@ -36,6 +35,7 @@ from ...code_executors.code_execution_utils import CodeExecutionResult
 from ...code_executors.code_execution_utils import CodeExecutionUtils
 from ...code_executors.code_execution_utils import File
 from ...code_executors.code_executor_context import CodeExecutorContext
+from ...code_executors.gemini_code_executor import GeminiCodeExecutor
 from ...events.event import Event
 from ...events.event_actions import EventActions
 from ...models.llm_response import LlmResponse
@@ -152,7 +152,7 @@ class _CodeExecutionResponseProcessor(BaseLlmResponseProcessor):
     if llm_response.partial:
       return
 
-    for event in _run_post_processor(invocation_context, llm_response):
+    async for event in _run_post_processor(invocation_context, llm_response):
       yield event
 
 
@@ -174,6 +174,11 @@ async def _run_pre_processor(
 
   if not code_executor or not isinstance(code_executor, BaseCodeExecutor):
     return
+
+  if isinstance(code_executor, GeminiCodeExecutor):
+    code_executor.process_llm_request(llm_request)
+    return
+
   if not code_executor.optimize_data_file:
     return
 
@@ -249,10 +254,10 @@ async def _run_pre_processor(
     llm_request.contents.append(copy.deepcopy(execution_result_event.content))
 
 
-def _run_post_processor(
+async def _run_post_processor(
     invocation_context: InvocationContext,
     llm_response,
-) -> Generator[Event, None, None]:
+) -> AsyncGenerator[Event, None]:
   """Post-process the model response by extracting and executing the first code block."""
   agent = invocation_context.agent
   code_executor = agent.code_executor
@@ -260,6 +265,9 @@ def _run_post_processor(
   if not code_executor or not isinstance(code_executor, BaseCodeExecutor):
     return
   if not llm_response or not llm_response.content:
+    return
+
+  if isinstance(code_executor, GeminiCodeExecutor):
     return
 
   code_executor_context = CodeExecutorContext(invocation_context.session.state)
@@ -305,7 +313,7 @@ def _run_post_processor(
       code_execution_result.stdout,
       code_execution_result.stderr,
   )
-  yield _post_process_code_execution_result(
+  yield await _post_process_code_execution_result(
       invocation_context, code_executor_context, code_execution_result
   )
 
